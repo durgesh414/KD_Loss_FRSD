@@ -1,0 +1,76 @@
+project:
+  proj_dir: project/KD/VGGFace2
+  model_dir: models/
+  cfg_fname: student_config.yml
+  train_log:
+    path: train.log
+    screen_intvl: 200
+    headers: {Student_Loss: ':3.4f',  KD_Loss: ':3.4f', Total_Student_Loss: ':3.4f', bkb_grad: ':3.2f', 
+              head_grad: ':3.2f', Mag_mean: ':3.2f', Mag_std: ':3.2f', cossine_loss: ':3.2f'}
+  val_log:
+    path: val.log
+    screen_intvl: 1
+    headers: {LFW: ':3.3f', AgeDB-30: ':3.3f', CA-LFW: ':3.3f', CP-LFW: ':3.3f'}
+  val_intvl: 2000
+  save_iters: [50000, 80000, 100000, 120000, 140000]
+data:
+  base:
+    dataset:
+      type: PairDataset
+      data_dir: scripts/data/val/
+      test_mode: true
+    dataloader: {type: DataLoader, batch_size: 64, shuffle: false, drop_last: false, num_workers: 10, pin_memory: true}
+  train:
+    dataset:
+      type: ClassDataset
+      name: VGGFace2  
+      data_dir: scripts/data/train/aligned
+      ann_path: scripts/data/train/aligned/vggface2_train_ann.txt
+      test_mode: false
+    dataloader: {batch_size: 64, shuffle: true, drop_last: true}
+  val:
+  - dataset:
+      name: LFW
+      ann_path: scripts/data/val/lfw_ann.txt
+      metrics:
+      - ACC
+  - dataset:
+      name: AgeDB-30
+      ann_path: scripts/data/val/agedb_30_ann.txt
+      metrics:
+      - ACC
+  - dataset:
+      name: CA-LFW
+      ann_path: scripts/data/val/calfw_ann.txt
+      metrics:
+      - ACC
+  - dataset:
+      name: CP-LFW
+      ann_path: scripts/data/val/cplfw_ann.txt
+      metrics:
+      - ACC
+model:
+  base:
+    net: {}
+    optimizer: {type: SGD, lr: 0.1, momentum: 0.9, weight_decay: 0.0005}
+    scheduler:
+      type: MultiStepLR
+      milestones: [50000, 100000, 120000, 140000] 
+      gamma: 0.1
+    cos_sim_loss_weight: 1.
+    attention_maps_weight: 0.0
+    l2_loss_weight: 0.15
+  backbone:
+    net:
+      type: iresnet18
+      out_channel: 512
+  head:
+    net:
+      type: SphereFace2
+      magn_type: C
+      alpha: 0.7
+      r: 40
+      m: 0.4
+      t: 3.0
+      lw: 10.
+    
