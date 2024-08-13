@@ -8,3 +8,5 @@ CUDA_VISIBLE_DEVICES=0 python train_kd.py --student_config config/train/ms1mv3_i
 CUDA_VISIBLE_DEVICES=0 python train_kd.py --student_config config/train/dlord_iresnet18_sphereface2_kd.yml --teacher_config config/train/dlord_iresnet100_sphereface2_kd.yml
 
 CUDA_VISIBLE_DEVICES=0 python cache_embedding3.py --proj_dir project/KD/20240724_114635  --model_name r18_dlord_cossine_run1_freezingtill4
+
+CUDA_VISIBLE_DEVICES=0 python train_kd.py --student_config config/train/vggface2_iresnet18_sphereface2_kd.yml --teacher_config config/train/vggface2_iresnet100_sphereface2.yml

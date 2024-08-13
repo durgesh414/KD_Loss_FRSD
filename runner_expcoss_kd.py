@@ -246,10 +246,10 @@ class IterRunner():
         # cosine KD loss
         cos_sim_loss = F.cosine_similarity(student_feats, teacher_feats).mean()
         cos_dis_loss = 1 - cos_sim_loss
-        # exp_loss = (torch.exp(1 - cos_sim_loss) - 1)
+        exp_loss = (torch.exp(1 - cos_sim_loss) - 1)
         # print("Cosine Loss", exp_loss)
 
-        kd_loss = self.cos_sim_loss_weight * cos_dis_loss #+ self.attention_maps_weight * attention_transfer_loss
+        kd_loss = self.cos_sim_loss_weight * exp_loss #+ self.attention_maps_weight * attention_transfer_loss
         
         # Combine the original loss and attention transfer loss
         total_student_loss = student_loss + kd_loss
@@ -283,7 +283,7 @@ class IterRunner():
                 'Mag_std': magnitude.std().item(),
                 'bkb_grad': b_grad,
                 'head_grad': h_grad,
-                'cossine_loss': cos_dis_loss,
+                'cossine_loss': exp_loss,
             }
             self.train_buffer.update(msg)
 
@@ -331,6 +331,7 @@ class IterRunner():
         if self.rank == 0:
             self.student_val_buffer.update(student_msg)
             self.teacher_val_buffer.update(teacher_msg)
+
 
     def run(self):
         # self.freeze_layers(self.student_model['backbone']['net'])
