@@ -6,7 +6,7 @@ project:
     path: train.log
     screen_intvl: 200
     headers: {Student_Loss: ':3.4f',  KD_Loss: ':3.4f', Total_Student_Loss: ':3.4f', bkb_grad: ':3.2f', 
-              head_grad: ':3.2f', Mag_mean: ':3.2f', Mag_std: ':3.2f', cossine_loss: ':3.2f'}
+              head_grad: ':3.2f', Mag_mean: ':3.2f', Mag_std: ':3.2f', sym_matrix: ':4.4f'}
   val_log:
     path: val.log
     screen_intvl: 1
@@ -57,9 +57,10 @@ model:
       type: MultiStepLR
       milestones: [50000, 100000, 120000, 140000] 
       gamma: 0.1
-    cos_sim_loss_weight: 1.
+    cos_sim_loss_weight: 0
     attention_maps_weight: 0.0
     l2_loss_weight: 0.15
+    sim_matrix_weight: 1000.
   backbone:
     net:
       type: iresnet18

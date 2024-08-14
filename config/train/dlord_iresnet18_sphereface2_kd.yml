@@ -60,6 +60,7 @@ model:
     cos_sim_loss_weight: 0.0
     attention_maps_weight: 0.0
     l2_loss_weight: 0.15
+    sim_matrix_weight: 1.
   backbone:
     net:
       type: iresnet18

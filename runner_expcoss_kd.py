@@ -180,6 +180,7 @@ class IterRunner():
             model_path = osp.join(self.student_model_dir, model_name)
             torch.save(self.student_model[module]['net'].state_dict(), model_path)
 
+
     def train(self):
         data, labels = next(self.train_loader)
         data, labels = data.to(self.rank), labels.to(self.rank)

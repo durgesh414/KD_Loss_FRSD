@@ -38,8 +38,9 @@ class IterRunner():
         # Combine the original loss and cosine similarity loss
         self.cos_sim_loss_weight = self.student_config['model']["head"]['cos_sim_loss_weight'] 
         self.attention_maps_weight = self.student_config['model']["head"]['attention_maps_weight'] 
+        self.sim_matrix_weight = self.student_config['model']["head"]['sim_matrix_weight'] 
+        print("cosine_weight & sim matrix weight", self.cos_sim_loss_weight, self.sim_matrix_weight)
 
-        print("cosine_weight & attention_maps_weight", self.cos_sim_loss_weight, self.attention_maps_weight)
 
         if self.rank != 0:
             return
@@ -95,8 +96,6 @@ class IterRunner():
         with open(teacher_config_path, 'w') as f:
             yaml.dump(teacher_config, f, sort_keys=False, default_flow_style=None)
 
-
-     
 
     def freeze_layers(self, model):
         """
@@ -156,6 +155,7 @@ class IterRunner():
             model_path = osp.join(self.student_model_dir, model_name)
             torch.save(self.student_model[module]['net'].state_dict(), model_path)
 
+
     def train(self):
         data, labels = next(self.train_loader)
         data, labels = data.to(self.rank), labels.to(self.rank)
@@ -171,18 +171,25 @@ class IterRunner():
         student_similarity_matrix = F.cosine_similarity(student_feats.unsqueeze(1), student_feats.unsqueeze(0), dim=-1)
 
 
-        # Compute the difference between the similarity matrices
-        similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
+        # Compute the difference between the upper triangular parts of the similarity matrices
+        similarity_diff = teacher_similarity_matrix - student_similarity_matrix
+        # similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
 
-        # Calculate the mean of the difference matrix
-        similarity_diff_mean = similarity_diff.mean()
+        # Create a mask for the upper triangular part, including the diagonal
+        mask = torch.triu(torch.ones_like(similarity_diff), diagonal=0)
+        similarity_diff_upper = similarity_diff * mask
 
-        # Combine with existing KD loss (you may want to adjust the weight of this new loss)
-        kd_loss = self.cos_sim_loss_weight * similarity_diff_mean
+        # # Compute the Frobenius norm of the difference
+        # similarity_loss = torch.norm(similarity_diff_upper, p='fro')
+        # # similarity_loss = similarity_diff_upper.mean()
+        # # print(similarity_loss.item())
 
-        # Combine the original loss with KD loss
+        # Compute the Mean Squared Error (MSE) of the difference
+        similarity_loss = F.mse_loss(similarity_diff_upper, torch.zeros_like(similarity_diff_upper))
+
+        kd_loss = self.sim_matrix_weight * similarity_loss
+
         total_student_loss = student_loss + kd_loss
-
         total_loss = total_student_loss
         total_loss.backward()
 
@@ -212,6 +219,7 @@ class IterRunner():
                 'Mag_std': magnitude.std().item(),
                 'bkb_grad': b_grad,
                 'head_grad': h_grad,
+                'sym_matrix': similarity_loss
             }
             self.train_buffer.update(msg)
 
@@ -263,7 +271,7 @@ class IterRunner():
 
 
     def run(self):
-        self.freeze_layers(self.student_model['backbone']['net'])
+        # self.freeze_layers(self.student_model['backbone']['net'])
 
         while self._iter <= self._max_iters:
             if self._iter % self.val_intvl == 0 and self._iter > 0:
