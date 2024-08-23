@@ -48,10 +48,10 @@ class IterRunner():
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 
         # Loading state dicts for student and teacher models
-        student_state_dict_path = "project/og/r18_og_vggface2_20240617_174438/models/backbone_140000.pth"
+        # student_state_dict_path = "project/og/r18_og_vggface2_20240617_174438/models/backbone_140000.pth"
         teacher_state_dict_path = "project/og/r100_og_vggface2_20240617_174425/models/backbone_140000.pth"
 
-        self.student_model['backbone']['net'].load_state_dict(torch.load(student_state_dict_path))
+        # self.student_model['backbone']['net'].load_state_dict(torch.load(student_state_dict_path))
         self.teacher_model['backbone']['net'].load_state_dict(torch.load(teacher_state_dict_path))
 
         # Freeze the teacher model parameters
@@ -170,22 +170,29 @@ class IterRunner():
         teacher_similarity_matrix = F.cosine_similarity(teacher_feats.unsqueeze(1), teacher_feats.unsqueeze(0), dim=-1)
         student_similarity_matrix = F.cosine_similarity(student_feats.unsqueeze(1), student_feats.unsqueeze(0), dim=-1)
 
-
-        # Compute the difference between the upper triangular parts of the similarity matrices
-        similarity_diff = teacher_similarity_matrix - student_similarity_matrix
-        # similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
+        # similarity_diff = student_similarity_matrix - teacher_similarity_matrix
+        similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
 
         # Create a mask for the upper triangular part, including the diagonal
         mask = torch.triu(torch.ones_like(similarity_diff), diagonal=0)
         similarity_diff_upper = similarity_diff * mask
 
-        # # Compute the Frobenius norm of the difference
-        # similarity_loss = torch.norm(similarity_diff_upper, p='fro')
-        # # similarity_loss = similarity_diff_upper.mean()
-        # # print(similarity_loss.item())
+        # # Directly apply the transformation without defining a separate function
+        shift = 0.1
+        transformed_similarity_diff_upper = similarity_diff_upper / (similarity_diff_upper + shift)
+        similarity_loss = torch.mean(transformed_similarity_diff_upper)
 
-        # Compute the Mean Squared Error (MSE) of the difference
-        similarity_loss = F.mse_loss(similarity_diff_upper, torch.zeros_like(similarity_diff_upper))
+        # print("Maximum value:", torch.max(similarity_diff_upper).item())
+        # print("Mean value on abs:", torch.mean(similarity_diff_upper).item())
+
+        # print("Maximum value transformed_similarity_diff_upper:", torch.max(transformed_similarity_diff_upper).item())
+        # print("Mean value on abs transformed_similarity_diff_upper:", torch.mean(transformed_similarity_diff_upper).item())        
+
+        # # Compute the Frobenius norm of the difference
+        # similarity_loss1 = torch.norm(similarity_diff_upper, p='fro')
+
+        # # Compute the Mean Squared Error (MSE) of the difference
+        # mse_loss = F.mse_loss(similarity_diff_upper, torch.zeros_like(similarity_diff_upper))
 
         kd_loss = self.sim_matrix_weight * similarity_loss
 

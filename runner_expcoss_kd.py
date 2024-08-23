@@ -242,15 +242,28 @@ class IterRunner():
         # # Compute norms of the features to check normalization
         # student_feat_norms = torch.norm(student_feats, p=2, dim=1)
         # teacher_feat_norms = torch.norm(teacher_feats, p=2, dim=1)
-        
+    
         
         # cosine KD loss
         cos_sim_loss = F.cosine_similarity(student_feats, teacher_feats).mean()
         cos_dis_loss = 1 - cos_sim_loss
-        exp_loss = (torch.exp(1 - cos_sim_loss) - 1)
+
+        baseline_offset = 1.1
+        epsilon = 1e-8  # Small constant to ensure non-zero, positive loss
+        exp_loss = torch.exp(1 - cos_sim_loss) - baseline_offset  #Baseline Offset
+        exp_loss = torch.clamp(exp_loss, min=epsilon)
+
+
+        # Implement the inverted log-sum-exp directly
+        scale = 3.0
+        inverted_loss = torch.log(1 + torch.exp(-scale * cos_sim_loss))
+        x = torch.tensor([1.0]) 
+        inverted_loss = torch.log(1 + torch.exp(-scale * x)) - torch.log(1 + torch.exp(-scale * 1))
+
+
         # print("Cosine Loss", exp_loss)
 
-        kd_loss = self.cos_sim_loss_weight * exp_loss #+ self.attention_maps_weight * attention_transfer_loss
+        kd_loss = self.cos_sim_loss_weight * inverted_loss #+ self.attention_maps_weight * attention_transfer_loss
         
         # Combine the original loss and attention transfer loss
         total_student_loss = student_loss + kd_loss
