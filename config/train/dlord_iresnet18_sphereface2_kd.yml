@@ -19,7 +19,7 @@ data:
       type: PairDataset
       data_dir: scripts/data/val/
       test_mode: true
-    dataloader: {type: DataLoader, batch_size: 64, shuffle: false, drop_last: false, num_workers: 10, pin_memory: true}
+    dataloader: {type: DataLoader, batch_size: 64, shuffle: false, drop_last: false, num_workers: 9, pin_memory: true}
   train:
     dataset:
       type: ClassDataset

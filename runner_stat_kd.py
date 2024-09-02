@@ -41,7 +41,6 @@ class IterRunner():
         self.sim_matrix_weight = self.student_config['model']["head"]['sim_matrix_weight'] 
         print("cosine_weight & sim matrix weight", self.cos_sim_loss_weight, self.sim_matrix_weight)
 
-
         if self.rank != 0:
             return
 
@@ -95,6 +94,31 @@ class IterRunner():
         teacher_config_path = osp.join(student_proj_dir, teacher_proj_cfg['cfg_fname'])
         with open(teacher_config_path, 'w') as f:
             yaml.dump(teacher_config, f, sort_keys=False, default_flow_style=None)
+
+        # Initialize memory banks for storing features
+        self.memory_bank_student = None
+        self.memory_bank_teacher = None
+        self.memory_bank_size = 3 * train_loader.batch_size
+
+
+    def update_memory_bank(self, new_student_feats, new_teacher_feats):
+        # Detach the features before adding them to the memory bank
+        new_student_feats = new_student_feats.detach()
+        new_teacher_feats = new_teacher_feats.detach()
+
+        # If memory bank is not initialized, do it now
+        if self.memory_bank_student is None:
+            self.memory_bank_student = new_student_feats
+            self.memory_bank_teacher = new_teacher_feats
+        else:
+            # Concatenate new features to the existing memory bank
+            self.memory_bank_student = torch.cat((self.memory_bank_student, new_student_feats), dim=0)
+            self.memory_bank_teacher = torch.cat((self.memory_bank_teacher, new_teacher_feats), dim=0)
+
+            # If the memory bank exceeds the allowed size, dequeue the oldest features
+            if self.memory_bank_student.size(0) > self.memory_bank_size:
+                self.memory_bank_student = self.memory_bank_student[-self.memory_bank_size:]
+                self.memory_bank_teacher = self.memory_bank_teacher[-self.memory_bank_size:]
 
 
     def freeze_layers(self, model):
@@ -166,35 +190,56 @@ class IterRunner():
         student_loss = self.student_model['head']['net'](student_feats, labels)
         teacher_feats = self.teacher_model['backbone']['net'](data)
 
-        # Compute cosine similarity matrices for both teacher and student features
-        teacher_similarity_matrix = F.cosine_similarity(teacher_feats.unsqueeze(1), teacher_feats.unsqueeze(0), dim=-1)
-        student_similarity_matrix = F.cosine_similarity(student_feats.unsqueeze(1), student_feats.unsqueeze(0), dim=-1)
+        # Update the memory bank with current features
+        self.update_memory_bank(student_feats, teacher_feats)
 
-        # similarity_diff = student_similarity_matrix - teacher_similarity_matrix
-        similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
+        # Only calculate similarity loss if memory bank is sufficiently populated
+        if self.memory_bank_student.size(0) >= self.memory_bank_size:
+            # Use features from the memory bank for similarity computation
+            student_feats_bank = self.memory_bank_student
+            teacher_feats_bank = self.memory_bank_teacher
 
-        # Create a mask for the upper triangular part, including the diagonal
-        mask = torch.triu(torch.ones_like(similarity_diff), diagonal=0)
-        similarity_diff_upper = similarity_diff * mask
+            # Compute cosine similarity matrices for both teacher and student features
+            teacher_similarity_matrix = F.cosine_similarity(teacher_feats_bank.unsqueeze(1), teacher_feats_bank.unsqueeze(0), dim=-1)
+            student_similarity_matrix = F.cosine_similarity(student_feats_bank.unsqueeze(1), student_feats_bank.unsqueeze(0), dim=-1)
 
-        # # Directly apply the transformation without defining a separate function
-        shift = 0.1
-        transformed_similarity_diff_upper = similarity_diff_upper / (similarity_diff_upper + shift)
-        similarity_loss = torch.mean(transformed_similarity_diff_upper)
+            similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
 
-        # print("Maximum value:", torch.max(similarity_diff_upper).item())
-        # print("Mean value on abs:", torch.mean(similarity_diff_upper).item())
+            # Create a mask for the upper triangular part, including the diagonal
+            mask = torch.triu(torch.ones_like(similarity_diff), diagonal=0)
+            similarity_diff_upper = similarity_diff * mask
 
-        # print("Maximum value transformed_similarity_diff_upper:", torch.max(transformed_similarity_diff_upper).item())
-        # print("Mean value on abs transformed_similarity_diff_upper:", torch.mean(transformed_similarity_diff_upper).item())        
+            # Parameters for the transformation
+            r = 20. 
+            m = 0.2
+            # Implementing the logarithmic transformation
+            transformed_similarity_diff_upper = (1 / r) * torch.log(1 + torch.exp(r * (similarity_diff_upper - m)))
+    
+            # shift = 0.1
+            # transformed_similarity_diff_upper = similarity_diff_upper / (similarity_diff_upper + shift)
 
-        # # Compute the Frobenius norm of the difference
-        # similarity_loss1 = torch.norm(similarity_diff_upper, p='fro')
+            # Compute the similarity loss by taking the sum
+            similarity_loss_sum = torch.sum(transformed_similarity_diff_upper)
 
-        # # Compute the Mean Squared Error (MSE) of the difference
-        # mse_loss = F.mse_loss(similarity_diff_upper, torch.zeros_like(similarity_diff_upper))
+            # Assuming similarity_diff_upper is an upper triangular matrix
+            n = similarity_diff_upper.shape[0]
+            num_upper_tri_elements = ((n * (n - 1)) / 2 ) - n
 
-        kd_loss = self.sim_matrix_weight * similarity_loss
+            # Normalizing the loss by the number of elements in the upper triangular part
+            similarity_loss = similarity_loss_sum / num_upper_tri_elements
+
+
+            # # Calculate the Frobenius norm of the upper triangular matrix
+            # frobenius_norm = torch.norm(transformed_similarity_diff_upper, p='fro')
+            # print("***", frobenius_norm)
+           
+            # print("mean:", torch.mean(transformed_similarity_diff_upper), "sum:", similarity_loss_sum, "Loss:", similarity_loss, "const_scale: ", similarity_loss_sum/num_upper_tri_elements)
+
+            # # Compute the similarity loss
+            # similarity_loss = torch.mean(transformed_similarity_diff_upper)
+            kd_loss = self.sim_matrix_weight * similarity_loss
+        else:
+            kd_loss = torch.tensor(0.0).to(self.rank)
 
         total_student_loss = student_loss + kd_loss
         total_loss = total_student_loss
@@ -226,9 +271,10 @@ class IterRunner():
                 'Mag_std': magnitude.std().item(),
                 'bkb_grad': b_grad,
                 'head_grad': h_grad,
-                'sym_matrix': similarity_loss
+                'sym_matrix': similarity_loss_sum.item() if self.memory_bank_student.size(0) >= self.memory_bank_size else 0.0
             }
             self.train_buffer.update(msg)
+
 
 
     
