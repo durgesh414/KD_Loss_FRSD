@@ -57,7 +57,7 @@ model:
       type: MultiStepLR
       milestones: [50000, 100000, 120000, 140000] 
       gamma: 0.1
-    cos_sim_loss_weight: 12.
+    cos_sim_loss_weight: 15.
     attention_maps_weight: 0.0
     l2_loss_weight: 0.0
     sim_matrix_weight: 20.

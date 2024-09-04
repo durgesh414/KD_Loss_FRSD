@@ -185,65 +185,14 @@ class IterRunner():
         data, labels = next(self.train_loader)
         data, labels = data.to(self.rank), labels.to(self.rank)
 
-        # ## Attention Maps
-        # # Initialize dictionaries to store activations
-        # student_activations = {}
-        # teacher_activations = {}
-
-        # # Register hooks to capture the last activation of each layer for the student model
-        # student_layers = ['layer4'] #['layer1', 'layer2', 'layer3', 'layer4']
-        # for layer in student_layers:
-        #     layer_module = getattr(self.student_model['backbone']['net'], layer)[-1]
-        #     # print(f"Student model - Registering hook for layer: {layer} - {layer_module}")
-        #     layer_module.register_forward_hook(get_activation(layer, student_activations))
-
-        # # Register hooks to capture the last activation of each layer for the teacher model
-        # teacher_layers = ['layer4']
-        # for layer in teacher_layers:
-        #     layer_module = getattr(self.teacher_model['backbone']['net'], layer)[-1]
-        #     # print(f"Teacher model - Registering hook for layer: {layer} - {layer_module}")
-        #     layer_module.register_forward_hook(get_activation(layer, teacher_activations))
-    
-
-        # # Register hooks to capture the last activation of each layer for the student model
-        # # self.student_model['backbone']['net'].layer1[-1].register_forward_hook(get_activation('layer1', student_activations))
-        # # self.student_model['backbone']['net'].layer2[-1].register_forward_hook(get_activation('layer2', student_activations))
-        # # self.student_model['backbone']['net'].layer3[-1].register_forward_hook(get_activation('layer3', student_activations))
-        # self.student_model['backbone']['net'].layer4[-1].register_forward_hook(get_activation('layer4', student_activations))
-
-        # # Register hooks to capture the last activation of each layer for the teacher model
-        # # self.teacher_model['backbone']['net'].layer1[-1].register_forward_hook(get_activation('layer1', teacher_activations))
-        # # self.teacher_model['backbone']['net'].layer2[-1].register_forward_hook(get_activation('layer2', teacher_activations))
-        # # self.teacher_model['backbone']['net'].layer3[-1].register_forward_hook(get_activation('layer3', teacher_activations))
-        # self.teacher_model['backbone']['net'].layer4[-1].register_forward_hook(get_activation('layer4', teacher_activations))
-
+        
         # Forward pass
         self.set_model(test_mode=False)
         student_feats = self.student_model['backbone']['net'](data)
         student_loss = self.student_model['head']['net'](student_feats, labels)
         teacher_feats = self.teacher_model['backbone']['net'](data)
 
-        # # Compute attention maps for each layer
-        # attention_transfer_loss = 0
-        # for layer in ['layer4']: #'layer1', 'layer2', 'layer3',
-        #     student_attention_map = compute_attention_map(student_activations[layer])
-        #     teacher_attention_map = compute_attention_map(teacher_activations[layer])
-        #     # print(layer, "OG",student_attention_map.shape, teacher_attention_map.shape)
-
-        #     # Resize teacher attention map to match student attention map dimensions
-        #     # teacher_attention_map_resized = F.interpolate(teacher_attention_map, size=student_attention_map.shape[2:], mode='bilinear', align_corners=False)
-        #     # print("New", teacher_attention_map_resized.shape)
-
-        #     # Attention transfer loss
-        #     layer_attention_transfer_loss = F.mse_loss(student_attention_map, teacher_attention_map)
-        #     attention_transfer_loss += layer_attention_transfer_loss
-
-
-        # # Compute norms of the features to check normalization
-        # student_feat_norms = torch.norm(student_feats, p=2, dim=1)
-        # teacher_feat_norms = torch.norm(teacher_feats, p=2, dim=1)
-    
-        
+ 
         # cosine KD loss
         cos_sim_loss = F.cosine_similarity(student_feats, teacher_feats).mean()
         # cos_dis_loss = 1 - cos_sim_loss
@@ -255,7 +204,7 @@ class IterRunner():
 
 
         # New flexible loss parameters
-        l = 0.9  # Transition parameter
+        l = 0.9 # Transition parameter
         r = 40  # Steepness parameter
         b = 0.1  # Small constant for smoothness
 
@@ -266,13 +215,6 @@ class IterRunner():
 
         # # Clamp the loss to ensure it's positive
         flexible_loss = torch.clamp(flexible_loss, min=epsilon)
-
-
-        # Implement the inverted log-sum-exp directly
-        # scale = 3.0
-        # inverted_loss = torch.log(1 + torch.exp(-scale * cos_sim_loss))
-        # x = torch.tensor([1.0]) 
-        # inverted_loss = torch.log(1 + torch.exp(-scale * x)) - torch.log(1 + torch.exp(-scale * 1))
 
         kd_loss = self.cos_sim_loss_weight * flexible_loss #+ self.attention_maps_weight * attention_transfer_loss
         

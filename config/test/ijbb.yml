@@ -1,7 +1,6 @@
 # yml for IJB-B and IJB-C
 project:
   proj_dirs:
-  - project/mhe2_20240524_180547
 data:
   base:
     dataset:

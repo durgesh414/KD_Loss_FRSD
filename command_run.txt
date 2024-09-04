@@ -1,7 +1,7 @@
 CUDA_VISIBLE_DEVICES=0 python train.py  --config /home/kaushik/Durgesh/repo/SphereFace2/config/train/vggface2_iresnet18_sphereface2.yml
 
 
-CUDA_VISIBLE_DEVICES=0 python test.py --proj_dir /home/kaushik/Durgesh/repo/SphereFace2/project/mhe2_20240524_180547 --config /home/kaushik/Durgesh/repo/SphereFace2/config/test/ijbc.yml
+CUDA_VISIBLE_DEVICES=0 python test.py --config /home/kaushik/Durgesh/repo/SphereFace2/config/test/ijbc.yml --proj_dir project/mhe2_20240524_180547 
 
 
 CUDA_VISIBLE_DEVICES=0 python train_kd.py --student_config config/train/ms1mv3_iresnet18_sphereface2.yml --teacher_config config/train/ms1mv3_iresnet100_sphereface2.yml

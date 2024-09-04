@@ -1,7 +1,7 @@
 # yml for IJB-B and IJB-C
 project:
   proj_dirs:
-  - project/mhe2_20240524_180547
+  
 data:
   base:
     dataset:
@@ -33,4 +33,4 @@ data:
       - ijbc_1N_probe_mixed.csv
       pair_ann_file: ijbc_template_pair_label.txt
 parallel:
-  device_ids: [0, 1, 2, 3]
+  device_ids: [0]
