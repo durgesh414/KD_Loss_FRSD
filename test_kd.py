@@ -179,15 +179,6 @@ if __name__ == '__main__':
     if args.proj_dirs:
         config['project']['proj_dirs'] = args.proj_dirs
 
-    if args.start_time:
-        yy, mm, dd, h, m, s = args.start_time.split('-')
-        yy, mm, dd = int(yy), int(mm), int(dd)
-        h, m, s = int(h), int(m), int(s)
-        start_time = datetime(yy, mm, dd, h, m, s)
-        while datetime.now() < start_time:
-            print(datetime.now())
-            time.sleep(600)
-
     main_worker(config)
 
 

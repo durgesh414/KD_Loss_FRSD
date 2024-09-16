@@ -17,8 +17,9 @@ def load_image_pairs(pairs_file):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='A PyTorch project for face recognition with embeddings caching.')
-    parser.add_argument('--model_name', type=str, default=None, help='Model Name')
-    parser.add_argument('--proj_dirs', nargs='+', help='The project directories to be tested', required=True)
+    # parser.add_argument('--model_name', type=str, default=None, help='Model Name')
+    # parser.add_argument('--proj_dirs', nargs='+', help='The project directories to be tested', required=True)
+    parser.add_argument('--main_dir', type=str, help='The main directory containing project directories to be tested', required=True)
     return parser.parse_args()
 
 def preprocess_image(img_path):
@@ -70,7 +71,7 @@ def main_worker(model_name, class_name, proj_dir):
     bkb_net = build_from_cfg(test_config['model']['backbone']['net'], 'model.backbone').to(device)
     bkb_net.eval()
     
-    save_iters = [50000, 100000] #140000 [20000] #
+    save_iters = [140000] #140000 [20000]
 
     for save_iter in save_iters:
         weight_path = osp.join(proj_dir, "models", f'student_backbone_{save_iter}.pth')
@@ -80,7 +81,7 @@ def main_worker(model_name, class_name, proj_dir):
         embedding_cache = extract_embeddings(bkb_net, pairs, image_folder)
 
         # Save embedding cache
-        cache_dir = f"drdo/cache/kd/{model_name}_{save_iter}"
+        cache_dir = f"dlord_cache/kd/{model_name}_{save_iter}"
         os.makedirs(cache_dir, exist_ok=True)
         cache_path = osp.join(cache_dir, f"embedding_cache_{model_name}.json")
         
@@ -93,12 +94,23 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     args = parse_args()
 
-    proj_dirs = args.proj_dirs
-    # model_name = args.model_name
+    # proj_dirs = args.proj_dirs
+    # class_name = "pos"
+    
+    # for proj_dir in proj_dirs: 
+    #     print(proj_dir)
+    #     model_name = proj_dir.split("/")[-2][:-16]
+    #     main_worker(model_name, class_name, proj_dir)
+
+
+    # Find all project directories within the main directory
+    main_dir = args.main_dir
+    proj_dirs = [osp.join(main_dir, d) for d in os.listdir(main_dir) if osp.isdir(osp.join(main_dir, d))]
     class_name = "pos"
     
     for proj_dir in proj_dirs: 
-        model_name = proj_dir.split("/")[-2][:-16]
+        print("Current: ", proj_dir)
+        model_name = proj_dir.split("/")[-1][:-16]
         main_worker(model_name, class_name, proj_dir)
 
 

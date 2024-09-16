@@ -63,10 +63,10 @@ class IterRunner():
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 
         # Loading state dicts for student and teacher models
-        student_state_dict_path = "project/r18_og_vggface2_20240617_174438/models/backbone_140000.pth"
+        # student_state_dict_path = "project/r18_og_vggface2_20240617_174438/models/backbone_140000.pth"
         teacher_state_dict_path = "project/r100_og_vggface2_20240617_174425/models/backbone_140000.pth"
 
-        self.student_model['backbone']['net'].load_state_dict(torch.load(student_state_dict_path))
+        # self.student_model['backbone']['net'].load_state_dict(torch.load(student_state_dict_path))
         self.teacher_model['backbone']['net'].load_state_dict(torch.load(teacher_state_dict_path))
 
         # Freeze the teacher model parameters
@@ -284,7 +284,7 @@ class IterRunner():
             self.teacher_val_buffer.update(teacher_msg)
 
     def run(self):
-        self.freeze_layers(self.student_model['backbone']['net'])
+        # self.freeze_layers(self.student_model['backbone']['net'])
 
         while self._iter <= self._max_iters:
             if self._iter % self.val_intvl == 0 and self._iter > 0:

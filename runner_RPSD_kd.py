@@ -14,23 +14,6 @@ from torch.nn.utils import clip_grad_norm_
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = True
 
-def get_activation(name, activations):
-    def hook(model, input, output):
-        activations[name] = output
-        #print(f"{name} activation shape: {output.shape}")
-    return hook
-
-
-def compute_attention_map(activation):
-    # Sum of absolute values of the activations
-    # print(activation.shape)
-    attention_map = torch.sum(torch.abs(activation), dim=1, keepdim=True)
-    
-    # Normalize the attention map
-    attention_map = attention_map / attention_map.max()
-    
-    return attention_map
-
 
 class IterRunner():
 
@@ -52,11 +35,11 @@ class IterRunner():
         self.val_intvl = student_proj_cfg['val_intvl']
         self.save_iters = student_proj_cfg['save_iters']
 
-        # Combine the original loss and cosine similarity loss
-        self.cos_sim_loss_weight = self.student_config['model']["head"]['cos_sim_loss_weight'] 
-        self.attention_maps_weight = self.student_config['model']["head"]['attention_maps_weight'] 
-
-        print("cosine_weight & attention_maps_weight", self.cos_sim_loss_weight, self.attention_maps_weight)
+        self.sim_matrix_weight = self.student_config['KD']['sim_matrix_weight'] 
+        self.r_prime = self.student_config["KD"]['r_prime']
+        self.t = self.student_config["KD"]['t']
+        self.q = self.student_config["KD"]['q']
+        print("RPSD Hyperparams",  self.sim_matrix_weight, self.r_prime, self.t)
 
         if self.rank != 0:
             return
@@ -64,7 +47,6 @@ class IterRunner():
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 
         # Loading state dicts for student and teacher models
-        # student_state_dict_path = "project/og/r18_og_vggface2_20240617_174438/models/backbone_140000.pth"
         teacher_state_dict_path = "project/og/r100_og_vggface2_20240617_174425/models/backbone_140000.pth"
 
         # self.student_model['backbone']['net'].load_state_dict(torch.load(student_state_dict_path))
@@ -112,38 +94,30 @@ class IterRunner():
         with open(teacher_config_path, 'w') as f:
             yaml.dump(teacher_config, f, sort_keys=False, default_flow_style=None)
 
-        # For Debugging the student modell
-        # student_model = self.student_model['backbone']['net']  
-        # print("Layers using named_modules():")
-        # for name, layer in student_model.named_modules():
-        #     print(f"Layer name: {name}")
-        #     # print(layer)
-        #     print("-" * 30)
+        # Initialize memory banks for storing features
+        self.memory_bank_student = None
+        self.memory_bank_teacher = None
+        self.memory_bank_size = self.q * train_loader.batch_size
 
-        # print(self.student_model)
 
-    def freeze_layers(self, model):
-        """
-        Freeze all layers up to and including the second block of layer4.
-        Unfreeze all layers after that.
-        """
-        freeze = True
-        for name, module in model.named_modules():
-            if  "layer4" in name:  # "layer3" in name or
-                freeze = False  # Start unfreezing after layer4's second block
-            for param in module.parameters():
-                param.requires_grad = not freeze
-            if freeze:
-                print(f"Froze {name}")
-            else:
-                print(f"Unfroze {name}")
+    def update_memory_bank(self, new_student_feats, new_teacher_feats):
+        # Detach the features before adding them to the memory bank
+        new_student_feats = new_student_feats.detach()
+        new_teacher_feats = new_teacher_feats.detach()
 
-        # Additionally unfreeze layers after layer4
-        for name, module in model.named_children():
-            if name in ['bn2', 'dropout', 'fc', 'features']:
-                for param in module.parameters():
-                    param.requires_grad = True
-                print(f"Unfroze {name}")
+        # If memory bank is not initialized, 
+        if self.memory_bank_student is None:
+            self.memory_bank_student = new_student_feats
+            self.memory_bank_teacher = new_teacher_feats
+        else:
+            # Concatenate new features to the existing memory bank
+            self.memory_bank_student = torch.cat((self.memory_bank_student, new_student_feats), dim=0)
+            self.memory_bank_teacher = torch.cat((self.memory_bank_teacher, new_teacher_feats), dim=0)
+
+            # If the memory bank exceeds the allowed size, dequeue the oldest features
+            if self.memory_bank_student.size(0) > self.memory_bank_size:
+                self.memory_bank_student = self.memory_bank_student[-self.memory_bank_size:]
+                self.memory_bank_teacher = self.memory_bank_teacher[-self.memory_bank_size:]
 
 
     def set_model(self, test_mode):
@@ -173,7 +147,6 @@ class IterRunner():
             self.train_buffer.logger.info(
                 'Lrs are changed to {}'.format(lr_msg))
 
-
     def save_model(self):
         for module in self.student_model:
             model_name = 'student_{}_{}.pth'.format(str(module), str(self._iter))
@@ -185,45 +158,55 @@ class IterRunner():
         data, labels = next(self.train_loader)
         data, labels = data.to(self.rank), labels.to(self.rank)
 
-        
         # Forward pass
         self.set_model(test_mode=False)
         student_feats = self.student_model['backbone']['net'](data)
         student_loss = self.student_model['head']['net'](student_feats, labels)
         teacher_feats = self.teacher_model['backbone']['net'](data)
 
- 
-        # cosine KD loss
-        cos_sim_loss = F.cosine_similarity(student_feats, teacher_feats).mean()
-        # cos_dis_loss = 1 - cos_sim_loss
+        # Initialize normalized_similarity_diff_sum to a default value
+        normalized_similarity_diff_sum = torch.tensor(0.0).to(self.rank)
 
-        # baseline_offset = 1.1
-        epsilon = 1e-8  # Small constant to ensure non-zero, positive loss
-        # exp_loss = torch.exp(1 - cos_sim_loss) - baseline_offset  #Baseline Offset
-        # exp_loss = torch.clamp(exp_loss, min=epsilon)
+        # Only calculate similarity loss if memory bank is sufficiently populated
+        if self.memory_bank_student is not None and self.memory_bank_student.size(0) >= self.memory_bank_size:
+            # Use features from the memory bank for similarity computation
+            student_feats_bank = self.memory_bank_student
+            teacher_feats_bank = self.memory_bank_teacher
 
+            # Compute cosine similarity between new batch and memory bank
+            teacher_similarity_matrix = F.cosine_similarity(teacher_feats.unsqueeze(1), teacher_feats_bank.unsqueeze(0), dim=-1)
+            student_similarity_matrix = F.cosine_similarity(student_feats.unsqueeze(1), student_feats_bank.unsqueeze(0), dim=-1)
+            # print(teacher_similarity_matrix.shape, student_similarity_matrix.shape)
 
-        # New flexible loss parameters
-        l = 0.9 # Transition parameter
-        r = 40  # Steepness parameter
-        b = 0.1  # Small constant for smoothness
+            # Compute the difference between the student and teacher similarity matrices
+            similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
 
-        # Flexible loss calculation
-        base_loss = (1 / r) * torch.log(1 + torch.exp(-r * (cos_sim_loss - l)))
-        smooth_modifier = torch.sqrt((cos_sim_loss - l) ** 2 + b)
-        flexible_loss = base_loss * smooth_modifier
+            # Sum the similarity differences
+            similarity_diff_sum = torch.sum(similarity_diff)
+            normalization =  teacher_similarity_matrix.size(0) * teacher_similarity_matrix.size(1)
 
-        # # Clamp the loss to ensure it's positive
-        flexible_loss = torch.clamp(flexible_loss, min=epsilon)
-
-        kd_loss = self.cos_sim_loss_weight * flexible_loss #+ self.attention_maps_weight * attention_transfer_loss
+            # Normalize by the number of elements in the matrix
+            normalized_similarity_diff_sum = similarity_diff_sum / normalization
         
-        # Combine the original loss and attention transfer loss
-        total_student_loss = student_loss + kd_loss
 
+            log_part = (1 / self.r_prime) * torch.log(1 + torch.exp(self.r_prime * (normalized_similarity_diff_sum - self.t)))
+            # sqrt_part = torch.sqrt((normalized_similarity_diff_sum - m) ** 2 + b)
+
+            # Compute the transformed similarity difference sum
+            similarity_loss = log_part   #* sqrt_part
+            kd_loss = self.sim_matrix_weight * similarity_loss
+
+        else:
+            kd_loss = torch.tensor(0.0).to(self.rank)
+
+        # After computing similarity loss, adding new features to the memory bank
+        self.update_memory_bank(student_feats, teacher_feats)
+
+        total_student_loss = student_loss + kd_loss
         total_loss = total_student_loss
         total_loss.backward()
 
+        # Gradient clipping and optimization step
         b_norm = self.student_model['backbone']['clip_grad_norm']
         h_norm = self.student_model['head']['clip_grad_norm']
         if b_norm < 0. or h_norm < 0.:
@@ -250,7 +233,8 @@ class IterRunner():
                 'Mag_std': magnitude.std().item(),
                 'bkb_grad': b_grad,
                 'head_grad': h_grad,
-                'cossine_loss': flexible_loss,
+                'cossine_loss': 0.0,
+                'sim_difference_loss': normalized_similarity_diff_sum.item() if self.memory_bank_student.size(0) >= self.memory_bank_size else 0.0
             }
             self.train_buffer.update(msg)
 

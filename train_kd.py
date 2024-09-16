@@ -5,7 +5,7 @@ import argparse
 import torch
 
 from datetime import datetime
-from runner_expcoss_kd import IterRunner
+from runner_ILED_kd import IterRunner
 from utils import fill_config
 from builder import build_dataloader, build_model
 

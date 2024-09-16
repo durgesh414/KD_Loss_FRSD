@@ -39,7 +39,7 @@ class IterRunner():
         self.cos_sim_loss_weight = self.student_config['model']["head"]['cos_sim_loss_weight'] 
         self.attention_maps_weight = self.student_config['model']["head"]['attention_maps_weight'] 
         self.sim_matrix_weight = self.student_config['model']["head"]['sim_matrix_weight'] 
-        print("cosine_weight & sim matrix weight", self.cos_sim_loss_weight, self.sim_matrix_weight)
+        print("All cosine_weight & sim matrix weight", self.cos_sim_loss_weight, self.sim_matrix_weight)
 
         if self.rank != 0:
             return
@@ -120,31 +120,6 @@ class IterRunner():
                 self.memory_bank_student = self.memory_bank_student[-self.memory_bank_size:]
                 self.memory_bank_teacher = self.memory_bank_teacher[-self.memory_bank_size:]
 
-
-    def freeze_layers(self, model):
-        """
-        Freeze all layers up to and including the second block of layer4.
-        Unfreeze all layers after that.
-        """
-        freeze = True
-        for name, module in model.named_modules():
-            if  "layer4" in name:  # "layer3" in name or
-                freeze = False  # Start unfreezing after layer4's second block
-            for param in module.parameters():
-                param.requires_grad = not freeze
-            if freeze:
-                print(f"Froze {name}")
-            else:
-                print(f"Unfroze {name}")
-
-        # Additionally unfreeze layers after layer4
-        for name, module in model.named_children():
-            if name in ['bn2', 'dropout', 'fc', 'features']:
-                for param in module.parameters():
-                    param.requires_grad = True
-                print(f"Unfroze {name}")
-
-
     def set_model(self, test_mode):
         for module in self.student_model:
             if test_mode:
@@ -190,61 +165,67 @@ class IterRunner():
         student_loss = self.student_model['head']['net'](student_feats, labels)
         teacher_feats = self.teacher_model['backbone']['net'](data)
 
-        # Update the memory bank with current features
-        self.update_memory_bank(student_feats, teacher_feats)
+        # Initialize normalized_similarity_diff_sum and similarity_loss to default values
+        normalized_similarity_diff_sum = torch.tensor(0.0).to(self.rank)
+        similarity_loss = torch.tensor(0.0).to(self.rank)  # Initialize similarity_loss
 
         # Only calculate similarity loss if memory bank is sufficiently populated
-        if self.memory_bank_student.size(0) >= self.memory_bank_size:
+        if self.memory_bank_student is not None and self.memory_bank_student.size(0) >= self.memory_bank_size:
             # Use features from the memory bank for similarity computation
             student_feats_bank = self.memory_bank_student
             teacher_feats_bank = self.memory_bank_teacher
 
-            # Compute cosine similarity matrices for both teacher and student features
-            teacher_similarity_matrix = F.cosine_similarity(teacher_feats_bank.unsqueeze(1), teacher_feats_bank.unsqueeze(0), dim=-1)
-            student_similarity_matrix = F.cosine_similarity(student_feats_bank.unsqueeze(1), student_feats_bank.unsqueeze(0), dim=-1)
+            # Compute cosine similarity between new batch and memory bank
+            teacher_similarity_matrix = F.cosine_similarity(teacher_feats.unsqueeze(1), teacher_feats_bank.unsqueeze(0), dim=-1)
+            student_similarity_matrix = F.cosine_similarity(student_feats.unsqueeze(1), student_feats_bank.unsqueeze(0), dim=-1)
 
+            # Compute the difference between the student and teacher similarity matrices
             similarity_diff = abs(teacher_similarity_matrix - student_similarity_matrix)
 
-            # Create a mask for the upper triangular part, including the diagonal
-            mask = torch.triu(torch.ones_like(similarity_diff), diagonal=0)
-            similarity_diff_upper = similarity_diff * mask
+            # Sum the similarity differences
+            similarity_diff_sum = torch.sum(similarity_diff)
+            normalization = teacher_similarity_matrix.size(0) * teacher_similarity_matrix.size(1)
 
-            # Parameters for the transformation
-            r = 20. 
-            m = 0.2
-            # Implementing the logarithmic transformation
-            transformed_similarity_diff_upper = (1 / r) * torch.log(1 + torch.exp(r * (similarity_diff_upper - m)))
-    
-            # shift = 0.1
-            # transformed_similarity_diff_upper = similarity_diff_upper / (similarity_diff_upper + shift)
+            # Normalize by the number of elements in the matrix
+            normalized_similarity_diff_sum = similarity_diff_sum / normalization
 
-            # Compute the similarity loss by taking the sum
-            similarity_loss_sum = torch.sum(transformed_similarity_diff_upper)
+            # Apply your transformation (log and sqrt parts)
+            r_sim = 60.
+            m = 0.1
+            b_sim = 1
 
-            # Assuming similarity_diff_upper is an upper triangular matrix
-            n = similarity_diff_upper.shape[0]
-            num_upper_tri_elements = ((n * (n - 1)) / 2 ) - n
+            log_part = (1 / r_sim) * torch.log(1 + torch.exp(r_sim * (normalized_similarity_diff_sum - m)))
+            sqrt_part = torch.sqrt((normalized_similarity_diff_sum - m) ** 2 + b_sim)
 
-            # Normalizing the loss by the number of elements in the upper triangular part
-            similarity_loss = similarity_loss_sum / num_upper_tri_elements
+            # Compute the transformed similarity difference sum
+            similarity_loss = log_part * sqrt_part
 
+        # Compute cosine KD loss
+        cos_sim_loss = F.cosine_similarity(student_feats, teacher_feats).mean()
 
-            # # Calculate the Frobenius norm of the upper triangular matrix
-            # frobenius_norm = torch.norm(transformed_similarity_diff_upper, p='fro')
-            # print("***", frobenius_norm)
-           
-            # print("mean:", torch.mean(transformed_similarity_diff_upper), "sum:", similarity_loss_sum, "Loss:", similarity_loss, "const_scale: ", similarity_loss_sum/num_upper_tri_elements)
+        # New flexible loss parameters
+        l = 0.9  # Transition parameter
+        r_cos = 40  # Steepness parameter
+        b_cos = 0.1  # Small constant for smoothness
+        epsilon = 1e-8  # Small constant to ensure non-zero, positive loss
 
-            # # Compute the similarity loss
-            # similarity_loss = torch.mean(transformed_similarity_diff_upper)
-            kd_loss = self.sim_matrix_weight * similarity_loss
-        else:
-            kd_loss = torch.tensor(0.0).to(self.rank)
+        # Flexible loss calculation
+        base_loss = (1 / r_cos) * torch.log(1 + torch.exp(-r_cos * (cos_sim_loss - l)))
+        smooth_modifier = torch.sqrt((cos_sim_loss - l) ** 2 + b_cos)
+        flexible_loss = base_loss * smooth_modifier
 
+        # Clamp the loss to ensure it's positive
+        flexible_loss = torch.clamp(flexible_loss, min=epsilon)
+
+        # Compute total KD loss combining both KD losses
+        kd_loss = (self.cos_sim_loss_weight * flexible_loss) + (self.sim_matrix_weight * similarity_loss)
+
+        # Combine the original student loss and total KD loss
         total_student_loss = student_loss + kd_loss
         total_loss = total_student_loss
         total_loss.backward()
 
+        # Gradient clipping and optimization step
         b_norm = self.student_model['backbone']['clip_grad_norm']
         h_norm = self.student_model['head']['clip_grad_norm']
         if b_norm < 0. or h_norm < 0.:
@@ -260,6 +241,7 @@ class IterRunner():
 
         self.update_model()
 
+        # Update metrics
         if self.rank == 0:
             magnitude = torch.norm(student_feats, 2, 1)
             msg = {
@@ -271,10 +253,13 @@ class IterRunner():
                 'Mag_std': magnitude.std().item(),
                 'bkb_grad': b_grad,
                 'head_grad': h_grad,
-                'sym_matrix': similarity_loss_sum.item() if self.memory_bank_student.size(0) >= self.memory_bank_size else 0.0
+                'sym_matrix_loss': normalized_similarity_diff_sum.item() if self.memory_bank_student is not None and self.memory_bank_student.size(0) >= self.memory_bank_size else 0.0,
+                'cossine_loss': flexible_loss.item()
             }
             self.train_buffer.update(msg)
 
+        # Update memory bank
+        self.update_memory_bank(student_feats, teacher_feats)
 
 
     
